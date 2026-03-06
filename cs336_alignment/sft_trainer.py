@@ -202,12 +202,12 @@ class SFTTrainer:
                 gradient_accumulation_steps= self.config.gradient_accumulation_steps,
                 normalize_constant=self.config.normalize_constant,
             )# 已经反向传播
-            
             # TODO
             # # eval metrics
             total_batch_loss += scaled_loss.item()
             total_batch_entropy += masked_entropy.sum().item()# b l -> 1
             total_valid_tokens += valid_tokens
+            del input_ids,labels,response_mask,log_probs_entropy,policy_log_probs,masked_entropy
 
         avg_batch_loss = total_batch_loss / (self.config.gradient_accumulation_steps)
         avg_batch_entropy = total_batch_entropy / (total_valid_tokens+1e-6)

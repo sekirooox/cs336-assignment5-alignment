@@ -487,17 +487,13 @@ class EITrainer:
             # 缓存清理
             clear_gpu_memory()
 
-            # 显示调用save_checkpoint. train函数中save_interval设置为无穷大
-            os.makedirs(self.config.save_dir, exist_ok=True)
-            save_it_dir = os.path.join(self.config.save_dir,f'EI_iteration_{iteration+1}')
-            os.makedirs(save_it_dir, exist_ok=True)
-            sft_trainer.save_checkpoint(path=save_it_dir)
-
-
-
- 
-
-
+            # 只保存最后一个迭代的模型
+            if iteration == self.config.ei_iterations-1:
+                # 显示调用save_checkpoint. train函数中save_interval设置为无穷大
+                os.makedirs(self.config.save_dir, exist_ok=True)
+                save_it_dir = os.path.join(self.config.save_dir,f'EI_iteration_{iteration+1}')
+                os.makedirs(save_it_dir, exist_ok=True)
+                sft_trainer.save_checkpoint(path=save_it_dir)
 
                 
 

@@ -110,7 +110,7 @@ def get_lr_cosine_schedule_with_warmup(
     """
     # 1. warmup 阶段
     if it < warmup_iters:
-        print(f"Warmup phase: it={it}, warmup_iters={warmup_iters}, max_lr={max_lr}")
+        print(f"Warmup phase: it={it}, warmup_iters={warmup_iters}, cur_lr={max_lr * it / warmup_iters:.6f}")
         return max_lr * it / warmup_iters
 
     # 2. 退火结束后
@@ -275,6 +275,9 @@ class SFTTrainer:
         self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
 
+        # 缓存清理
+        clear_gpu_memory()
+
         return {
             'avg_batch_entropy':avg_batch_entropy,
             'avg_batch_loss':avg_batch_loss,
@@ -342,20 +345,21 @@ class SFTTrainer:
                 print(f"📊 Test results - Accuracy: {test_overview['accuracy']:.2%}, Correct: {test_overview['total_correct']}, Wrong: {test_overview['total_wrong']}")
                 print(test_overview)
 
+                log_dict['global_step'] = global_it
                 wandb.log(log_dict,step=global_it)
             
-            if self.config.cosine_schedule_iters > self.config.max_iters:
-                # 说明这是EI or GRPO迭代,不需要保存
-                print('No checkpoint saving during SFT phase (EI or GRPO training).')
-            else:
-                if it > 0 and (it % self.config.save_interval == 0 or it == self.config.max_iters-1):
+
+            if it > 0 and (it % self.config.save_interval == 0 or it == self.config.max_iters-1):
+                if self.config.cosine_schedule_iters > self.config.max_iters:
+                    # 说明这是EI or GRPO迭代,不需要保存
+                    print('No checkpoint saving during SFT phase (EI or GRPO training).')
+                else:
                     print(f"\n💾 Saving checkpoint at iteration {it}...")
                     os.makedirs(self.config.save_dir,exist_ok=True)
                     save_it_dir = os.path.join(self.config.save_dir,f'checkpoint_{it}')
                     os.makedirs(save_it_dir,exist_ok=True)
                     self.save_checkpoint(save_it_dir)
                     print(f"✅ Checkpoint saved to {save_it_dir}\n")
-        wandb.finish()
 
     @torch.no_grad()
     def evaluate(self):
@@ -479,6 +483,9 @@ class EITrainer:
             
             sft_trainer.train(global_start_step)
             global_start_step += self.config.max_iters # +=60
+
+            # 缓存清理
+            clear_gpu_memory()
 
             # 显示调用save_checkpoint. train函数中save_interval设置为无穷大
             os.makedirs(self.config.save_dir, exist_ok=True)

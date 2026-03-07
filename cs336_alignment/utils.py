@@ -4,6 +4,7 @@ import numpy as np
 import random
 import json
 import torch
+import gc
 
 def seed_everything(seed: int = 42):
     """
@@ -88,3 +89,10 @@ def get_r1_ground_truths_with_template(
     json_iter = load_jsonl(json_path)
     return [apply_r1_ground_truth_template(ground_truth_template,json_obj) for json_obj in json_iter]
 
+def clear_gpu_memory():
+    gc.collect()
+    # 4. 清理 CUDA 缓存（仅在 GPU 可用时调用）
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        # 回收跨进程共享缓存（如果没有多进程，也不会有副作用）
+        torch.cuda.ipc_collect()

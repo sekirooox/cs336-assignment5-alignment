@@ -75,3 +75,4 @@ trainer = SFTTrainer(
 
 
 trainer.train()
+wandb.finish()

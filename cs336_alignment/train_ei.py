@@ -9,6 +9,7 @@ import os
 from sft import *
 from sft_trainer import *
 from drgrpo_grader import r1_zero_reward_fn
+import wandb
 os.environ["WANDB_API_KEY"] = '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'
 
 import argparse
@@ -65,3 +66,4 @@ trainer = EITrainer(
 )
 
 trainer.train()
+wandb.finish()

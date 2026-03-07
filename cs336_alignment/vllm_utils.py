@@ -53,6 +53,19 @@ def generate_responses(
     responses = [output.outputs[0].text for output in outputs]
     return responses
 
+def generate_rollouts(
+    vllm:LLM,
+    prompts:List[str],
+    sampling_params:SamplingParams,
+)->List[List[str]]:
+    """
+    对每个prompt生成多条响应（rollout）
+    """
+    outputs = vllm.generate(prompts, sampling_params)
+    rollouts = [[o.text for o in output.outputs] for output in outputs]
+    return rollouts
+    
+
 @torch.no_grad()
 def evaluate_vllm(
     vllm:LLM,
@@ -108,8 +121,6 @@ def evaluate_vllm(
     overview['accuracy'] = overview['total_correct'] / overview['sample_size']
     overview['wrong_rate'] = overview['total_wrong'] / overview['sample_size']
     return overview
-
-    
 
 @torch.no_grad()
 def log_generation(

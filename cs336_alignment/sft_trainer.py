@@ -1,18 +1,19 @@
 from torch.utils.data import Dataset,DataLoader
-from typing import Tuple, List, Dict, Any, Optional
+from typing import Tuple, List, Dict, Any, Optional, Callable
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import itertools
-from utils import load_template,get_r1_prompts,get_r1_ground_truths,get_r1_ground_truths_with_template
+from utils import *
 from dataclasses import dataclass
 import torch
 from vllm import LLM,SamplingParams
-from vllm_utils import load_policy_into_vllm_instance,log_generation,evaluate_vllm
+from vllm_utils import *
 import random
 from sft import *
 import wandb
 import os
 from drgrpo_grader import r1_zero_reward_fn
 from sft_config import SFTConfig
+from ei_config import EIConfig
 
 def sft_collate_fn(batch: List[Tuple[str, str]], tokenizer: AutoTokenizer) -> Dict[str, Any]:
     """
@@ -69,6 +70,27 @@ class SFTDataset(Dataset):
             Ground truth: Paris
         """
         return self.prompts[idx], self.ground_truths[idx]
+    
+    @classmethod
+    def from_prompts_and_ground_truths(cls,
+        prompts:List[str],
+        ground_truths:List[str],
+        answers: List[str]
+    ):
+        assert len(prompts) == len(ground_truths) == len(answers), (
+            f"Length mismatch: prompts={len(prompts)}, "
+            f"ground_truths={len(ground_truths)}, answers={len(answers)}"
+        )
+
+        dummy = cls.__new__(cls)  # 空实例,跳过构造函数
+        dummy.json_path = "<from_lists>"
+        dummy.template = "<from_lists>"
+        dummy.prompts = prompts
+        dummy.ground_truths = ground_truths
+        dummy.answers = answers
+        return dummy
+        
+
 
 import math
 # cosine 动态学习率
@@ -139,7 +161,38 @@ class SFTTrainer:
         )
         # 变成循环迭代器
         self.data_iter = itertools.cycle(self.dataloader)
-        
+
+    @classmethod
+    def from_ei_trainer(
+        cls,
+        ei_trainer,# EI Trainer
+        train_dataset: SFTDataset,# from prompts and ground_truths
+    ):
+        dummy = cls.__new__(cls)  # 空实例,跳过构造函数
+        dummy.model = ei_trainer.model
+        dummy.tokenizer = ei_trainer.tokenizer
+        dummy.optimizer = ei_trainer.optimizer
+        dummy.config = ei_trainer.config
+        dummy.vllm = ei_trainer.vllm
+
+        # 初始化数据集
+        dummy.train_dataset = train_dataset
+        dummy.test_dataset = SFTDataset(
+            json_path = dummy.config.test_dataset_path,
+            prompt_template_path=dummy.config.prompt_template_path,
+        )
+
+        dummy.dataloader = DataLoader(
+            dataset = dummy.train_dataset,
+            batch_size = dummy.config.batch_size ,
+            shuffle = True,
+            drop_last = False,
+            collate_fn= lambda batch: sft_collate_fn(batch,dummy.tokenizer)
+        )
+        # 变成循环迭代器
+        dummy.data_iter = itertools.cycle(dummy.dataloader)
+        return dummy
+
     @torch.no_grad()
     def sample_responses(self)->tuple[List[str],List[str]]:
         assert len(self.test_dataset.prompts) == len(self.test_dataset.answers), \
@@ -149,7 +202,7 @@ class SFTTrainer:
         sampled_prompts = [self.test_dataset.prompts[idx] for idx in sampled_indices]
         sampled_answers = [self.test_dataset.answers[idx] for idx in sampled_indices]
         return sampled_prompts,sampled_answers
-    
+
     @torch.no_grad()
     def update_lr(self,it:int,optimizer:torch.optim.Optimizer):
         lr = get_lr_cosine_schedule_with_warmup(
@@ -292,8 +345,6 @@ class SFTTrainer:
                 print(f"✅ Checkpoint saved to {save_it_dir}\n")
                 
         wandb.finish()
-            
-
 
     @torch.no_grad()
     def evaluate(self):
@@ -311,10 +362,113 @@ class SFTTrainer:
         print('save checkpoint successfully!')
 
         
+# EIDataset: 在训练阶段用于替换SFTDataset
+class EIDataset(SFTDataset):
+    def __init__(
+        self,
+        vllm:LLM ,
+        sampling_params: SamplingParams,# 温度不应该为1.0,需要有一定随机性
+        reward_fn : Callable,
+        json_path:str,# only training set
+        prompt_template_path:str,
+        sft_sample_size:int ,
+    ):
+        super().__init__(json_path,prompt_template_path)
+        # vllm
+        self.vllm = vllm
+        self.sampling_params = sampling_params
 
+        # rollout size is defined in sampling_params.n
+        self.sft_sample_size = sft_sample_size
+        self.reward_fn  = reward_fn
+    def __len__(self):
+        return super().__len__()
+    def __getitem__(self, index):
+        return super().__getitem__(index)
+    
+    @torch.no_grad()
+    def sample_responses(self)->tuple[List[str],List[str]]:
+        assert len(self.prompts) == len(self.answers), \
+    f"数据集长度不匹配: prompts {len(self.prompts)} vs answers {len(self.answers)}" 
+        indices = range(len(self.prompts))
+        sampled_indices = random.sample(indices,self.sft_sample_size)
+        sampled_prompts = [self.prompts[idx] for idx in sampled_indices]
+        sampled_answers = [self.answers[idx] for idx in sampled_indices]
+        return sampled_prompts,sampled_answers
+    
+    @torch.no_grad()
+    def get_ei_batch(
+        self,
+    )->tuple[List[str],List[str],List[str]]:
+        sampled_questions,sampled_answers = self.sample_responses()
+        rollouts: List[List[str]] = generate_rollouts(self.vllm, sampled_questions, self.sampling_params)
+        
+        rollout_prompts = []
+        rollout_ground_truths = []
+        rollout_answers = []
 
+        for i in range(len(rollouts)):
+            # ith prompt,ith answer
+            for response in rollouts[i]:
+                reward_dict = self.reward_fn(response,sampled_answers[i],fast=True)
+                if reward_dict['reward'] == 1.0:
+                    rollout_prompts.append(sampled_questions[i])
+                    rollout_ground_truths.append(response)
+                    rollout_answers.append(sampled_answers[i])
+        return rollout_prompts, rollout_ground_truths, rollout_answers
+        
                 
+class EITrainer:
+    def __init__(
+        self,
+        model: AutoModelForCausalLM,
+        tokenizer : AutoTokenizer,
+        optimizer : torch.optim.Optimizer,
+        config: EIConfig, 
+        vllm: LLM,
+    ):
+        # 模型和优化器配置
+        self.model = model
+        self.tokenizer = tokenizer
+        self.optimizer = optimizer
+        self.config =  config
+        
+        # vllm：离线推理模型
+        self.vllm = vllm
+        self.ei_dataset =  EIDataset(
+            vllm = vllm,
+            sampling_params = self.config.sampling_params,
+            reward_fn = self.config.reward_fn,
+            json_path = self.config.train_dataset_path,
+            prompt_template_path=self.config.prompt_template_path,
+            sft_sample_size = self.config.sft_sample_size
+        )
+    def train(self):
+        for iteration in range(self.config.ei_iterations):
+            load_policy_into_vllm_instance(self.model,self.vllm)# \theta_old
+            rollout_prompts, rollout_ground_truths, rollout_answers = self.ei_dataset.get_ei_batch()# sample_responses -> vllm evaluate
+            
+            print(f"Iteration {iteration+1}: obtained {len(rollout_prompts)} valid samples for SFT training.")
 
+            # 从现有prompt和ground_truths中构建一个新的SFT数据集
+            train_dataset = SFTDataset.from_prompts_and_ground_truths(
+                prompts=rollout_prompts,
+                ground_truths=rollout_ground_truths,
+                answers=rollout_answers,
+            )
+
+            sft_trainer = SFTTrainer.from_ei_trainer(
+                ei_trainer=self,
+                train_dataset=train_dataset,
+            )
+            
+            sft_trainer.train()
+
+            # 显示调用save_checkpoint. train函数中save_interval设置为无穷大
+            os.makedirs(self.config.save_dir, exist_ok=True)
+            save_it_dir = os.path.join(self.config.save_dir,f'EI_iteration_{iteration+1}')
+            os.makedirs(save_it_dir, exist_ok=True)
+            sft_trainer.save_checkpoint(save_path=save_it_dir)
 
 
  

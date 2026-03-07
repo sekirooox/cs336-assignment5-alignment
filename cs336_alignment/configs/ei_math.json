@@ -1,0 +1,40 @@
+{
+    "seed": 42,
+    "project_name": "cs336-assignment5",
+    "name": "EI-training-math-full-bs2",
+    "batch_size": 2,
+    "gradient_accumulation_steps": 64,
+    "max_iters": 100,
+    "start_iters": 0,
+    "weight_decay": 1e-5,
+    "betas": [
+        0.9,
+        0.98
+    ],
+    "eps": 1e-06,
+    "max_lr": 5e-5,
+    "min_lr": 5e-6,
+    "warmup_iters": 10,
+    "cosine_schedule_iters": 100,
+    "max_grad_norm": 1.0,
+    "normalize_constant": 1.0,
+    "train_dataset_path": "preprocessed/math/train.jsonl",
+    "test_dataset_path": "preprocessed/math/test.jsonl",
+    "prompt_template_path": "cs336_alignment/prompts/r1_zero.prompt",
+    "eval_interval": 20,
+    "sample_size": 4,
+    "save_interval": 200,
+    "save_dir": "checkpoints/ei/math-full-bs2",
+    "temperature": 0.8,
+    "top_p": 0.9,
+    "max_tokens": 1024,
+    "stop": [
+        "</answer>"
+    ],
+    "include_stop_str_in_output": true,
+    "reward_fn_name": "r1_zero_reward_fn",
+    "ei_iterations": 3,
+    "rollout_size": 4,
+    "sft_sample_size": 128,
+    "min_tokens": 32
+}

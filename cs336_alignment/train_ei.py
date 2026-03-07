@@ -39,8 +39,8 @@ wandb.init(
 )
 
 # 设备
-device1 = get_device(0)
-device2 = get_device(1)
+device1 = get_device(1)
+device2 = get_device(2)
 
 # 训练模型
 model_name ='model/Qwen2.5-Math-1.5B'

@@ -52,7 +52,7 @@ class SFTConfig:
     save_interval: int = 250  # 每多少步保存一次
     save_dir: str = "checkpoints/"
     
-    # vLLM推理配置 - 这些参数用于创建SamplingParams
+    # vLLM推理配置 - 这些参数用于创建SamplingParams SFT和EI不能共用一个SamplingParams
     temperature: float = 1.0
     top_p: float = 1.0
     max_tokens: int = 1024
@@ -61,6 +61,7 @@ class SFTConfig:
     
     # 奖励函数配置 - 存储函数名称
     reward_fn_name: str = "r1_zero_reward_fn"
+
     
     # 这些字段会在__post_init__中创建，不直接序列化
     def __post_init__(self):

@@ -110,11 +110,13 @@ def get_lr_cosine_schedule_with_warmup(
     """
     # 1. warmup 阶段
     if it < warmup_iters:
+        print(f"Warmup phase: it={it}, warmup_iters={warmup_iters}, max_lr={max_lr}")
         return max_lr * it / warmup_iters
 
     # 2. 退火结束后
     if it > cosine_schedule_iters:
         return min_lr
+    
 
     # 3. cosine decay 阶段
     decay_ratio = (it - warmup_iters) / (cosine_schedule_iters - warmup_iters)
@@ -210,7 +212,7 @@ class SFTTrainer:
             self.config.max_lr,
             self.config.min_lr,
             self.config.warmup_iters,
-            self.config.cosine_schedule_iters
+            self.config.cosine_schedule_iters# 这个值作用于全局
         )
         for param_group in optimizer.param_groups:
             param_group['lr']=lr
@@ -278,7 +280,9 @@ class SFTTrainer:
             'avg_batch_loss':avg_batch_loss,
         }
     
-    def train(self):
+    def train(self,
+        global_start_step:int =0, # 全局起始步数
+        ):
         print(f"🚀 Starting training from iteration {self.config.start_iters} to {self.config.max_iters}")
         print(f"📊 Training configuration: batch_size={self.config.batch_size}, gradient_accumulation_steps={self.config.gradient_accumulation_steps}")
         print(f"💾 Checkpoints will be saved every {self.config.save_interval} steps to {self.config.save_dir}")
@@ -286,7 +290,10 @@ class SFTTrainer:
         log_dict = {}
         for it in range(self.config.start_iters,self.config.max_iters):
             self.model.train()
-            self.update_lr(it,self.optimizer)
+            
+            # EI：全局步数作为学习率调度的输入
+            global_it = it + global_start_step # 0 + 60 = 60
+            self.update_lr(global_it,self.optimizer)
             train_step_log = self.train_step()
 
             if it % 10 == 0:  # 每10步打印一次训练状态
@@ -334,16 +341,20 @@ class SFTTrainer:
                 log_dict['eval_wrong_rate'] = test_overview['wrong_rate']
                 print(f"📊 Test results - Accuracy: {test_overview['accuracy']:.2%}, Correct: {test_overview['total_correct']}, Wrong: {test_overview['total_wrong']}")
                 print(test_overview)
-                wandb.log(log_dict,step=it)
+
+                wandb.log(log_dict,step=global_it)
             
-            if it > 0 and (it % self.config.save_interval == 0 or it == self.config.max_iters-1):
-                print(f"\n💾 Saving checkpoint at iteration {it}...")
-                os.makedirs(self.config.save_dir,exist_ok=True)
-                save_it_dir = os.path.join(self.config.save_dir,f'checkpoint_{it}')
-                os.makedirs(save_it_dir,exist_ok=True)
-                self.save_checkpoint(save_it_dir)
-                print(f"✅ Checkpoint saved to {save_it_dir}\n")
-                
+            if self.config.cosine_schedule_iters > self.config.max_iters:
+                # 说明这是EI or GRPO迭代,不需要保存
+                print('No checkpoint saving during SFT phase (EI or GRPO training).')
+            else:
+                if it > 0 and (it % self.config.save_interval == 0 or it == self.config.max_iters-1):
+                    print(f"\n💾 Saving checkpoint at iteration {it}...")
+                    os.makedirs(self.config.save_dir,exist_ok=True)
+                    save_it_dir = os.path.join(self.config.save_dir,f'checkpoint_{it}')
+                    os.makedirs(save_it_dir,exist_ok=True)
+                    self.save_checkpoint(save_it_dir)
+                    print(f"✅ Checkpoint saved to {save_it_dir}\n")
         wandb.finish()
 
     @torch.no_grad()
@@ -352,7 +363,7 @@ class SFTTrainer:
             self.vllm,
             self.test_dataset.prompts,
             self.test_dataset.answers, # 只需要答案
-            self.config.sampling_params,
+            self.config.sampling_params,# EI和SFT共用一个采样参数是不公平的
             self.config.reward_fn,
         )
 
@@ -437,17 +448,21 @@ class EITrainer:
         self.vllm = vllm
         self.ei_dataset =  EIDataset(
             vllm = vllm,
-            sampling_params = self.config.sampling_params,
+            sampling_params = self.config.ei_sampling_params,
             reward_fn = self.config.reward_fn,
             json_path = self.config.train_dataset_path,
             prompt_template_path=self.config.prompt_template_path,
             sft_sample_size = self.config.sft_sample_size
         )
     def train(self):
+        global_start_step = 0
         for iteration in range(self.config.ei_iterations):
             load_policy_into_vllm_instance(self.model,self.vllm)# \theta_old
             rollout_prompts, rollout_ground_truths, rollout_answers = self.ei_dataset.get_ei_batch()# sample_responses -> vllm evaluate
-            
+            if len(rollout_prompts) == 0:
+                print(f"Iteration {iteration+1}: No valid samples obtained for SFT training. Skipping this iteration.")
+                continue
+
             print(f"Iteration {iteration+1}: obtained {len(rollout_prompts)} valid samples for SFT training.")
 
             # 从现有prompt和ground_truths中构建一个新的SFT数据集
@@ -462,13 +477,15 @@ class EITrainer:
                 train_dataset=train_dataset,
             )
             
-            sft_trainer.train()
+            sft_trainer.train(global_start_step)
+            global_start_step += self.config.max_iters # +=60
 
             # 显示调用save_checkpoint. train函数中save_interval设置为无穷大
             os.makedirs(self.config.save_dir, exist_ok=True)
             save_it_dir = os.path.join(self.config.save_dir,f'EI_iteration_{iteration+1}')
             os.makedirs(save_it_dir, exist_ok=True)
-            sft_trainer.save_checkpoint(save_path=save_it_dir)
+            sft_trainer.save_checkpoint(path=save_it_dir)
+
 
 
  

@@ -1,0 +1,50 @@
+{
+    "seed": 42,
+    "project_name": "cs336-assignment5",
+    "name": "GRPO-training",
+    "batch_size": 2,
+    "gradient_accumulation_steps": 128,
+    "max_iters": 200,
+    "start_iters": 0,
+    "weight_decay": 1e-5,
+    "betas": [
+        0.9,
+        0.98
+    ],
+    "eps": 1e-6,
+    "max_lr": 5e-6,
+    "min_lr": 1e-6,
+    "warmup_iters": 20,
+    "cosine_schedule_iters": 200,
+    "max_grad_norm": 1.0,
+    "normalize_constant": 1.0,
+    "train_dataset_path": "preprocessed/math/train.jsonl",
+    "test_dataset_path": "preprocessed/math/test.jsonl",
+    "prompt_template_path": "cs336_alignment/prompts/r1_zero.prompt",
+    "eval_interval": 20,
+    "sample_size": 4,
+    "save_interval": 100,
+    "save_dir": "checkpoints/",
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "max_tokens": 1024,
+    "stop": [
+        "</answer>"
+    ],
+    "include_stop_str_in_output": true,
+    "reward_fn_name": "r1_zero_reward_fn",
+    "group_size": 4,
+    "clip_range": 0.2,
+    "advantage_eps": 1e-8,
+    "normalize_by_std": true,
+    "loss_type": "grpo_clip",
+    "n_train_steps_per_rollout_batch": 1,
+    "grpo_temperature": 1.0,
+    "grpo_top_p": 0.9,
+    "grpo_max_tokens": 1024,
+    "grpo_min_tokens": 32,
+    "grpo_stop": [
+        "</answer>"
+    ],
+    "grpo_include_stop_str_in_output": true
+}

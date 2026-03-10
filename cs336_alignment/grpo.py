@@ -1,6 +1,8 @@
 import torch
 from typing import Callable,List,Optional,Union,Literal
 from einops import rearrange
+
+@torch.no_grad()
 def compute_group_normalized_rewards(
     reward_fn: Callable[[str, str], dict[str, float]],
     rollout_responses,
@@ -60,7 +62,7 @@ def compute_group_normalized_rewards(
         'avg_reward':raw_rewards.mean().item(),
         'std_reward':raw_rewards.std().item(),
         'max_reward':raw_rewards.max().item(),
-        'min_reward':raw_rewards.max().item(),
+        'min_reward':raw_rewards.min().item(),
     }
     return advantages, raw_rewards, metadata
 
@@ -119,7 +121,6 @@ def compute_grpo_clip_loss(
     }
     return loss, metadata
 
-
 from typing import Literal
 def compute_policy_gradient_loss(
     policy_log_probs: torch.Tensor,
@@ -134,6 +135,8 @@ def compute_policy_gradient_loss(
         metadata = {
             'raw_rewards': raw_rewards,
         }
+        if raw_rewards.ndim == 1:
+            raw_rewards = raw_rewards.unsqueeze(-1) # b -> b 1
         return compute_naive_policy_gradient_loss(
             raw_rewards_or_advantages=raw_rewards,
             policy_log_probs=policy_log_probs,
@@ -144,6 +147,8 @@ def compute_policy_gradient_loss(
         metadata = {
             'advantages': advantages,
         }
+        if advantages.ndim == 1:
+            advantages = advantages.unsqueeze(-1) # b -> b 1
         return compute_naive_policy_gradient_loss(
             raw_rewards_or_advantages=advantages,
             policy_log_probs=policy_log_probs,
@@ -158,6 +163,8 @@ def compute_policy_gradient_loss(
             'advantages':advantages,
             'old_log_probs':old_log_probs,
         }
+        if advantages.ndim == 1:
+            advantages = advantages.unsqueeze(-1) # b -> b 1
         loss,grpo_metadata = compute_grpo_clip_loss(
             advantages=advantages,
             policy_log_probs=policy_log_probs,
@@ -166,16 +173,16 @@ def compute_policy_gradient_loss(
         )
         metadata.update(grpo_metadata)
         return loss,metadata
-    
+        # dict_keys(['cliprange', 'advantages', 'old_log_probs', 'is_clipped', 'is_clipped_ratio'])
 def masked_mean(
     tensor: torch.Tensor,
     mask: torch.Tensor,# bool
     dim: int | None = None,
 ) -> torch.Tensor:
     """
+    这个代码是错误的,会影响均值: 
     masked_tensor = tensor * mask
     return masked_tensor.mean(dim=dim)
-    这个代码是错误的,会影响均值
     """
     valid_elements = mask.float().sum(dim=dim)# b l-> b
     masked_tensor = tensor * mask
@@ -218,3 +225,4 @@ def grpo_microbatch_train_step(
         'loss': masked_loss.item(),# 1
     })
     return scaled_loss, metadata
+    # dict_keys(['cliprange', 'advantages', 'old_log_probs', 'is_clipped', 'is_clipped_ratio', 'scaled_loss', 'loss'])

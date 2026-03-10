@@ -2,7 +2,7 @@ from vllm.model_executor import set_random_seed as vllm_set_random_seed
 from unittest.mock import patch
 from vllm import LLM,SamplingParams
 from transformers import PreTrainedModel,AutoTokenizer,AutoModelForCausalLM
-from typing import Union,List,Callable,Dict,Any,Tuple
+from typing import Union,List,Callable,Dict,Any,Tuple,Literal,Optional
 import torch
 from sft import tokenize_prompt_and_output,get_response_log_probs
 from utils import *
@@ -53,6 +53,8 @@ def generate_responses(
     responses = [output.outputs[0].text for output in outputs]
     return responses
 
+# EI
+@torch.no_grad()
 def generate_rollouts(
     vllm:LLM,
     prompts:List[str],
@@ -65,6 +67,89 @@ def generate_rollouts(
     rollouts = [[o.text for o in output.outputs] for output in outputs]
     return rollouts
     
+@torch.no_grad()
+def get_response_log_probs_vllm(
+        repeated_prompt_ids:List[List[int]],# b*g ?
+        flatten_output_log_probs:List[List[float]],# b*g ?
+        response_mask: torch.Tensor, # ... l
+    )->torch.Tensor:
+        """
+        return : bg l
+        """
+        max_seq_len = response_mask.shape[-1]
+        # logprob<=0 填充的无效值应该为整数
+        old_log_probs = [
+                [100]* len(prompt_ids) + old_log_probs + 
+                [100]* (max_seq_len -len(prompt_ids) - len(old_log_probs)+1) # padding last token
+                for prompt_ids, old_log_probs in zip(repeated_prompt_ids, flatten_output_log_probs)
+        ]
+        # b*g l+1 多出一个token,补充一个padding
+        old_log_probs = torch.tensor(old_log_probs, device=response_mask.device)
+        return old_log_probs[:,1:]# b*g l
+
+@torch.no_grad()
+def generate_grpo_samples(
+    vllm: LLM,
+    prompts: list[str],# unrepeated prompts
+    sampling_params: SamplingParams,
+) -> Dict[str, List[List[List[float]]]]:
+    """
+    使用 vLLM 为每个 prompt 生成多条响应（rollout），并返回：
+    - 文本响应
+    - 每个响应 token 的 log_prob（旧策略）
+    - 每个 prompt 的 token_ids（用于确定 prompt 长度）
+
+    """
+    outputs = vllm.generate(prompts, sampling_params)
+    responses: list[list[str]] = [
+        [o.text for o in output_per_prompt.outputs]
+        for output_per_prompt in outputs
+    ]
+    flatten_responses = [
+        response_per_rollout
+        for responses_per_prompt in responses
+            for response_per_rollout in responses_per_prompt
+    ]
+
+    output_logprobs: list[list[list[float]]] = [
+        [
+            [
+                logprobs_dict[token_id].logprob
+                for token_id, logprobs_dict in zip(
+                    output_per_rollout.token_ids,
+                    output_per_rollout.logprobs,
+                )
+            ]
+            for output_per_rollout in output_per_prompt.outputs
+        ]
+        for output_per_prompt in outputs
+    ]
+    flatten_output_logprobs = [
+        output_logprobs_per_rollout
+        for output_logprobs_per_prompt in output_logprobs
+            for output_logprobs_per_rollout in output_logprobs_per_prompt
+    ]
+
+    prompt_token_ids: list[list[int]] = [
+        output_per_prompt.prompt_token_ids
+        for output_per_prompt in outputs
+    ]
+    repeated_prompt_token_ids = [
+        prompt_token_ids_per_sample
+        for prompt_token_ids_per_sample in prompt_token_ids
+            for _ in range(sampling_params.n)  # 每个 prompt 重复 n 次（n 是 rollout 数量）
+    ]
+    unflatten_metdata = {
+        "responses": responses,
+        "output_logprobs": output_logprobs,
+        "prompt_token_ids": prompt_token_ids,
+    }
+    flatten_metadata = {
+        "responses": flatten_responses,
+        "output_logprobs": flatten_output_logprobs,
+        "prompt_token_ids": repeated_prompt_token_ids,
+    }
+    return unflatten_metdata, flatten_metadata
 
 @torch.no_grad()
 def evaluate_vllm(

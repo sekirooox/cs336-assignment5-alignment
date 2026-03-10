@@ -1,7 +1,8 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
+from typing import List,Dict,Literal,Union,Optional
 
-def tokenize_prompt_and_output(prompt_strs, output_strs, tokenizer):
+def tokenize_prompt_and_output(prompt_strs:List[str], output_strs:List[str], tokenizer)->dict[str,torch.Tensor]:
     """
     对提示和输出字符串进行分词，并构建一个掩码，标记响应 token（值为 1），其余（提示或填充）为 0。
 
@@ -89,7 +90,8 @@ def get_response_log_probs(
     labels: torch.Tensor,
     return_token_entropy: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """参数:
+    """
+    参数:
     - model:PreTrainedModel,用于评分的HuggingFace模型（若无需计算梯度,需放置在正确设备上并处于推理模式）。
     - input_ids:torch.Tensor,形状为（batch_size, sequence_length）,由分词方法生成的拼接后的提示词+响应token。
     - labels:torch.Tensor,形状为（batch_size, sequence_length）,由分词方法生成的标签。

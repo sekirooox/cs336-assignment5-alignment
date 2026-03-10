@@ -1004,12 +1004,12 @@ def grade(model_answer: str, gt_answer: str, fast: bool = True):
         )
     return correct
 
-
+from typing import Dict
 def r1_zero_reward_fn(
-response:list[str], 
-ground_truth:list[str], # only answer is required 
+response:str, 
+ground_truth:str, # only answer is required 
 fast=True
-):
+)->Dict[str,float]:
     """
     这个奖励函数预期传入的是纯答案
     格式检查：检查 "</think> <answer>" 是否在response中（注意中间有空格）

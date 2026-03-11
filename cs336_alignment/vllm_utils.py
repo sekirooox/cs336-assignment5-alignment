@@ -221,6 +221,10 @@ def log_generation(
     vllm:LLM,
     sampling_params,
 ):
+    """
+    同时需要vllm和model
+    对于model的显存占用有一定影响
+    """
     device = next(model.parameters()).device
     responses = generate_responses(
         vllm,
@@ -290,14 +294,6 @@ def log_generation(
         "n_examples": len(prompts),
     }
 
+    clear_gpu_memory()
     model.train()
     return {"summary": summary, "rows": rows}
-    
-    
-    
-    
-    
-    
-    
-    
-    

@@ -575,6 +575,10 @@ class GRPOTrainer(SFTTrainer):
         total_batch_entropy = 0.0
         load_policy_into_vllm_instance(self.model, self.vllm)
 
+        # TODO： Off-policy GRPO的实现
+        
+
+        # NOTE: On-policy GRPO
         # 梯度累积 得到一个microbatch: 使用同一个old policy 采样得到rollout
         for step in range(self.config.gradient_accumulation_steps):
             # 加载flatten后的数据: List[str] bg
@@ -601,6 +605,7 @@ class GRPOTrainer(SFTTrainer):
             advantages = advantages.to(self.model.device)
             raw_rewards = raw_rewards.to(self.model.device)
 
+            # NOTE: DEBUG时可以关闭这个选项
             if torch.sum(advantages) == 0.0:
                 print(f"Gradient Accumulation Step {step}: All rewards are zero or ones. Skipping this microbatch.")
                 continue
@@ -614,7 +619,7 @@ class GRPOTrainer(SFTTrainer):
             response_mask = inputs['response_mask'].to(self.model.device)
 
             # 使用model分别计算old_log_probs和policy_log_probs: torch.tensor b*g l
-            with torch.inference_mode():# fast inference, no_grad
+            with torch.inference_mode():# fast inference, no_grad 
                 old_log_probs_token_entropy = get_response_log_probs(# require_grad == False
                     model= self.model,
                     input_ids = input_ids,
@@ -624,20 +629,17 @@ class GRPOTrainer(SFTTrainer):
                 old_log_probs = old_log_probs_token_entropy['log_probs'].to(self.model.device)
                 # old_token_entropy = old_log_probs_token_entropy['token_entropy'].to(self.model.device)
 
-            # TODO: Off-policy
-            # for train_step in range(self.config.n_train_steps_per_rollout_batch):
-
-            # policy_log_probs: b*g l
+            # policy_log_probs: b*g l +13k GPU 
             policy_log_probs_token_entropy = get_response_log_probs(
                 model= self.model, 
                 input_ids = input_ids,
                 labels = labels,
-                return_token_entropy=True                
+                return_token_entropy=False# save GPU memory   
             )
             policy_log_probs = policy_log_probs_token_entropy['log_probs'].to(self.model.device)
-            policy_token_entropy = policy_log_probs_token_entropy['token_entropy'].to(self.model.device)
+            # policy_token_entropy = policy_log_probs_token_entropy['token_entropy'].to(self.model.device)
             
-            # 函数包含反向传播, 更新策略模型 TODO:wanb.log(loss_metadata)
+            # 函数包含反向传播, 更新策略模型 
             scaled_loss,loss_metadata = grpo_microbatch_train_step(
                 policy_log_probs = policy_log_probs,
                 response_mask = response_mask,
@@ -649,14 +651,17 @@ class GRPOTrainer(SFTTrainer):
                 cliprange= self.config.clip_range
             )
             total_batch_loss += scaled_loss.item()
-            total_batch_entropy += masked_mean(policy_token_entropy, response_mask)# 全局平均
+            # total_batch_entropy += masked_mean(policy_token_entropy, response_mask)# 全局平均
 
             train_step_log = {
                 'is_clipped_ratio': loss_metadata['is_clipped_ratio'],
                 'gradient_step_sclaed_loss': loss_metadata['scaled_loss'],
                 'gradient_step': global_it * self.config.gradient_accumulation_steps + step,
             }
+            del input_ids,labels,response_mask,old_log_probs,policy_log_probs,advantages,raw_rewards
+            clear_gpu_memory()# -6k
             wandb.log(train_step_log)
+            
 
         # 梯度累积更新
         torch.nn.utils.clip_grad_norm_(

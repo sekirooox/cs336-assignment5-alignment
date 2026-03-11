@@ -1,19 +1,19 @@
 {
     "seed": 42,
     "project_name": "cs336-assignment5",
-    "name": "GRPO-training",
-    "batch_size": 2,
-    "gradient_accumulation_steps": 128,
+    "name": "GRPO-training-standard-hyperparameters",
+    "batch_size": 1,
+    "gradient_accumulation_steps": 256,
     "max_iters": 200,
     "start_iters": 0,
     "weight_decay": 1e-5,
     "betas": [
         0.9,
-        0.98
+        0.95
     ],
     "eps": 1e-6,
-    "max_lr": 5e-6,
-    "min_lr": 1e-6,
+    "max_lr": 1e-5,
+    "min_lr": 2e-6,
     "warmup_iters": 20,
     "cosine_schedule_iters": 200,
     "max_grad_norm": 1.0,

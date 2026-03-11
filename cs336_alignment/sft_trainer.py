@@ -34,26 +34,25 @@ def sft_collate_fn(batch: List[Tuple[str, str]], tokenizer: AutoTokenizer) -> Di
         tokenizer=tokenizer
     )
 
-# 新的规则函数
+# 新的规整函数
 def grpo_collate_fn(batch: List[Tuple[str, str]], tokenizer: AutoTokenizer, group_size
 )->Dict[str, List[List[str]]]:# b*g ?
     """
     GRPO的数据规整函数
+    compute_group_normalized_rewards需要接受List[str]的输入
     """
-    prompts, ground_truths, answers = zip(*batch)
+    prompts, answers = zip(*batch)
     repeated_prompts = [
         prompt
-        for prompt in prompts for _ in range(group_size)
-    ]
-    repeated_ground_truths =[
-        gt
-        for gt in ground_truths for _ in range(group_size)
+        for prompt in prompts 
+            for _ in range(group_size)
     ]
     repeated_answers = [
         answer
-        for answer in answers for _ in range(group_size)
+        for answer in answers 
+            for _ in range(group_size)
     ]
-    return prompts, ground_truths, answers, repeated_prompts, repeated_ground_truths, repeated_answers
+    return prompts, repeated_prompts, answers, repeated_answers
 
 class SFTDataset(Dataset):
     """
@@ -531,10 +530,8 @@ class GRPODataset(SFTDataset):
             Prompt: Question: What is the capital of France?\nAnswer:
             Ground truth: Paris
         """
-        return self.prompts[idx], self.ground_truths[idx], self.answers[idx]            
+        return self.prompts[idx], self.answers[idx]      # 不需要ground_truths      
 
-# class GRPOConfig:
-#     pass
 
 class GRPOTrainer(SFTTrainer):
     def __init__(
@@ -572,61 +569,68 @@ class GRPOTrainer(SFTTrainer):
         # 变成循环迭代器
         self.data_iter = itertools.cycle(self.dataloader)
 
-    def train_step(self)->dict[str:float,str:float]:
+    def train_step(self,global_it:int)->dict[str:float,str:float]:
         # eval metrics
         total_batch_loss = 0.0
         total_batch_entropy = 0.0
         load_policy_into_vllm_instance(self.model, self.vllm)
+
         # 梯度累积 得到一个microbatch: 使用同一个old policy 采样得到rollout
         for step in range(self.config.gradient_accumulation_steps):
-            # 加载flatten后的数据: List[str] bg 
-            prompts, ground_truths, answers, flatten_prompts, flatten_ground_truths, flatten_answers = next(self.data_iter)
+            # 加载flatten后的数据: List[str] bg
+            prompts, repeated_prompts, answers, repeated_answers = next(self.data_iter)
             
-            # 使用旧策略进行rollout采样
-            unflatten_metdata, flatten_metadata = generate_grpo_samples(
-                self.vllm, prompts, self.config.grpo_sampling_params # n=group_size 
+            # TODO:
+            # rollout: 展平的问题,答案和回答
+            responses: List[List[str]] = generate_rollouts(# b g
+                vllm = self.vllm,
+                prompts = prompts,# unflatten_prompts
+                sampling_params = self.config.grpo_sampling_params, # 使用温和的策略进行采样
             )
-            # responses = unflatten_metdata['responses']
-            # output_logprobs = unflatten_metdata['output_logprobs']
-            # prompt_token_ids = unflatten_metdata['prompt_token_ids']
-            flatten_responses:List[str] = flatten_metadata['responses']
-            flatten_output_logprobs:List[float] = flatten_metadata['output_logprobs']
-            repeated_prompt_token_ids:List[int] = flatten_metadata['prompt_token_ids']
+            flatten_responses: List[str] =[# b*g
+                response
+                for responses_per_prompt in responses
+                    for response in responses_per_prompt
+            ]
 
             # 获得raw_rewards和advantages: torch:tensor b*g 1 no_grad
             advantages, raw_rewards ,reward_metadata = compute_group_normalized_rewards(
-                self.config.reward_fn,flatten_responses,flatten_answers,
+                self.config.reward_fn,flatten_responses,repeated_answers,
                 self.config.group_size,self.config.advantage_eps,self.config.normalize_by_std
             )
             advantages = advantages.to(self.model.device)
             raw_rewards = raw_rewards.to(self.model.device)
 
-            if torch.sum(raw_rewards) == 0.0 or torch.sum(raw_rewards) == float(len(raw_rewards)):
+            if torch.sum(advantages) == 0.0:
                 print(f"Gradient Accumulation Step {step}: All rewards are zero or ones. Skipping this microbatch.")
                 continue
             
             # 展开后的prompts和responses拼接成输入和输出: torch.tensor  b*g l
             inputs = tokenize_prompt_and_output(
-                flatten_prompts, flatten_responses, self.tokenizer,# p+o
+                repeated_prompts, flatten_responses, self.tokenizer,# p+o
             )
             input_ids = inputs['input_ids'].to(self.model.device)
             labels = inputs['labels'].to(self.model.device)
             response_mask = inputs['response_mask'].to(self.model.device)
 
-            # old log probs: torch.tensor b*g l no_grad
-            old_log_probs = get_response_log_probs_vllm(
-                repeated_prompt_ids= repeated_prompt_token_ids,
-                flatten_output_log_probs= flatten_output_logprobs,
-                response_mask= response_mask
-            )# 已确保torch.sum((old_log_probs!= 100.0) ^ response_mask) == 0
-            old_log_probs = old_log_probs.to(self.model.device)
+            # 使用model分别计算old_log_probs和policy_log_probs: torch.tensor b*g l
+            with torch.inference_mode():# fast inference, no_grad
+                old_log_probs_token_entropy = get_response_log_probs(# require_grad == False
+                    model= self.model,
+                    input_ids = input_ids,
+                    labels = labels,
+                    return_token_entropy=False,
+                )
+                old_log_probs = old_log_probs_token_entropy['log_probs'].to(self.model.device)
+                # old_token_entropy = old_log_probs_token_entropy['token_entropy'].to(self.model.device)
 
             # TODO: Off-policy
             # for train_step in range(self.config.n_train_steps_per_rollout_batch):
-            # policy_log_probs: 包含propmt和填充部分 b*g l 
+
+            # policy_log_probs: b*g l
             policy_log_probs_token_entropy = get_response_log_probs(
                 model= self.model, 
-                input_ids = input_ids,# 使用旧采样的input_ids和labels
+                input_ids = input_ids,
                 labels = labels,
                 return_token_entropy=True                
             )
@@ -647,6 +651,13 @@ class GRPOTrainer(SFTTrainer):
             total_batch_loss += scaled_loss.item()
             total_batch_entropy += masked_mean(policy_token_entropy, response_mask)# 全局平均
 
+            train_step_log = {
+                'is_clipped_ratio': loss_metadata['is_clipped_ratio'],
+                'gradient_step_sclaed_loss': loss_metadata['scaled_loss'],
+                'gradient_step': global_it * self.config.gradient_accumulation_steps + step,
+            }
+            wandb.log(train_step_log)
+
         # 梯度累积更新
         torch.nn.utils.clip_grad_norm_(
             self.model.parameters(),
@@ -657,9 +668,9 @@ class GRPOTrainer(SFTTrainer):
         self.optimizer.zero_grad(set_to_none=True)  
         
         avg_batch_loss = total_batch_loss 
-        avg_batch_entropy = total_batch_entropy
-        # TODO：delete something
+        avg_batch_entropy = total_batch_entropy / self.config.gradient_accumulation_steps
 
+        # TODO：delete something
         # 缓存清理
         clear_gpu_memory()
         return {
@@ -675,9 +686,8 @@ class GRPOTrainer(SFTTrainer):
         log_dict = {}
         for it in range(self.config.start_iters,self.config.max_iters):
             self.model.train()
-            
             self.update_lr(it,self.optimizer)
-            train_step_log = self.train_step()
+            train_step_log = self.train_step(global_it=it)
 
             if it % 10 == 0:  # 每10步打印一次训练状态
                 current_lr = self.optimizer.param_groups[0]['lr']

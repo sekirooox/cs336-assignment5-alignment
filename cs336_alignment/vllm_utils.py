@@ -66,7 +66,10 @@ def generate_rollouts(
     outputs = vllm.generate(prompts, sampling_params)
     rollouts = [[o.text for o in output.outputs] for output in outputs]
     return rollouts
-    
+
+
+
+# BUG: 使用vllm获得old_log_probs的函数逻辑存在严重错误, 不建议使用
 @torch.no_grad()
 def get_response_log_probs_vllm(
         repeated_prompt_ids:List[List[int]],# b*g ?
@@ -87,6 +90,7 @@ def get_response_log_probs_vllm(
         old_log_probs = torch.tensor(old_log_probs, device=response_mask.device)
         return old_log_probs[:,1:]# b*g l
 
+# NOTE: vllm不能按照预期产生old_log_probs, 现在的返回值无效
 @torch.no_grad()
 def generate_grpo_samples(
     vllm: LLM,

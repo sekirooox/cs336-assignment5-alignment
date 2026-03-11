@@ -434,7 +434,6 @@ class GRPOConfig(SFTConfig):
             seed=self.seed,
             include_stop_str_in_output=self.grpo_include_stop_str_in_output,
             n=self.group_size,
-            logprobs=1, # 固定参数,需要
         )
 
     def to_json(self, filepath: str) -> None:

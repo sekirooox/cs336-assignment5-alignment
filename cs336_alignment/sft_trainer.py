@@ -130,7 +130,7 @@ def get_lr_cosine_schedule_with_warmup(
     """
     # 1. warmup 阶段
     if it < warmup_iters:
-        print(f"Warmup phase: it={it}, warmup_iters={warmup_iters}, cur_lr={max_lr * it / warmup_iters:.6f}")
+        print(f"Warmup phase: it={it}, warmup_iters={warmup_iters}, cur_lr={max_lr * it / warmup_iters:.8f}")
         return max_lr * it / warmup_iters
 
     # 2. 退火结束后
@@ -693,6 +693,7 @@ class GRPOTrainer(SFTTrainer):
         print(f"📈 Evaluation will be performed every {self.config.eval_interval} steps\n")
         log_dict = {}
         for it in range(self.config.start_iters,self.config.max_iters):
+            it += 1
             self.model.train()
             self.update_lr(it,self.optimizer)
             train_step_log = self.train_step(global_it=it)
@@ -703,8 +704,8 @@ class GRPOTrainer(SFTTrainer):
 
             log_dict ['train_avg_loss'] = train_step_log['avg_batch_loss']
             log_dict ['train_avg_token_entropy'] = train_step_log['avg_batch_entropy']
-
-            if it % self.config.eval_interval == 0 or it == self.config.max_iters-1:
+            
+            if it % self.config.eval_interval == 0 or it == self.config.max_iters:
                 # 必须部署vllm
                 load_policy_into_vllm_instance(self.model,self.vllm)
                 sampled_prompts, sampled_answers = self.sample_responses()
@@ -746,7 +747,7 @@ class GRPOTrainer(SFTTrainer):
                 wandb.log(log_dict,step=it)
             
 
-            if it > 0 and (it % self.config.save_interval == 0 or it == self.config.max_iters-1):
+            if  it % self.config.save_interval == 0 or it == self.config.max_iters:
                 print(f"\n💾 Saving checkpoint at iteration {it}...")
                 os.makedirs(self.config.save_dir,exist_ok=True)
                 save_it_dir = os.path.join(self.config.save_dir,f'checkpoint_{it}')

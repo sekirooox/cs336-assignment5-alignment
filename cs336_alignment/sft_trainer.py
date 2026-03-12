@@ -573,18 +573,15 @@ class GRPOTrainer(SFTTrainer):
         # eval metrics
         total_batch_loss = 0.0
         total_batch_entropy = 0.0
+        gradient_update_step:int = 0
         load_policy_into_vllm_instance(self.model, self.vllm)
 
-        # TODO： Off-policy GRPO的实现
-        
-
-        # NOTE: On-policy GRPO
+        # Off-policy GRPO的实现
         # 梯度累积 得到一个microbatch: 使用同一个old policy 采样得到rollout
-        for step in range(self.config.gradient_accumulation_steps):
+        for step1 in range(self.config.gradient_accumulation_steps):
             # 加载flatten后的数据: List[str] bg
             prompts, repeated_prompts, answers, repeated_answers = next(self.data_iter)
             
-            # TODO:
             # rollout: 展平的问题,答案和回答
             responses: List[List[str]] = generate_rollouts(# b g
                 vllm = self.vllm,
@@ -605,10 +602,11 @@ class GRPOTrainer(SFTTrainer):
             advantages = advantages.to(self.model.device)
             raw_rewards = raw_rewards.to(self.model.device)
 
+            # NOTE: 不需要这个, 因为要计算更新步数
             # NOTE: DEBUG时可以关闭这个选项
-            if torch.sum(advantages) == 0.0:
-                print(f"Gradient Accumulation Step {step}: All rewards are zero or ones. Skipping this microbatch.")
-                continue
+            # if torch.sum(advantages) == 0.0:
+            #     # print(f"Gradient Accumulation Step {step+1}: All rewards are zero or ones. Skipping this microbatch.")
+            #     continue
             
             # 展开后的prompts和responses拼接成输入和输出: torch.tensor  b*g l
             inputs = tokenize_prompt_and_output(
@@ -626,51 +624,56 @@ class GRPOTrainer(SFTTrainer):
                     labels = labels,
                     return_token_entropy=False,
                 )
-                old_log_probs = old_log_probs_token_entropy['log_probs'].to(self.model.device)
+                old_log_probs = old_log_probs_token_entropy['log_probs'].detach().to(self.model.device)
                 # old_token_entropy = old_log_probs_token_entropy['token_entropy'].to(self.model.device)
-
-            # policy_log_probs: b*g l +13k GPU 
-            policy_log_probs_token_entropy = get_response_log_probs(
-                model= self.model, 
-                input_ids = input_ids,
-                labels = labels,
-                return_token_entropy=False# save GPU memory   
-            )
-            policy_log_probs = policy_log_probs_token_entropy['log_probs'].to(self.model.device)
-            # policy_token_entropy = policy_log_probs_token_entropy['token_entropy'].to(self.model.device)
             
-            # 函数包含反向传播, 更新策略模型 
-            scaled_loss,loss_metadata = grpo_microbatch_train_step(
-                policy_log_probs = policy_log_probs,
-                response_mask = response_mask,
-                gradient_accumulation_steps=self.config.gradient_accumulation_steps,
-                loss_type = self.config.loss_type,
-                raw_rewards = raw_rewards,
-                advantages = advantages,
-                old_log_probs = old_log_probs,
-                cliprange= self.config.clip_range
-            )
-            total_batch_loss += scaled_loss.item()
-            # total_batch_entropy += masked_mean(policy_token_entropy, response_mask)# 全局平均
+            for step2 in range(self.config.n_train_steps_per_rollout_batch):
+                # policy_log_probs: b*g l +13k GPU 
+                policy_log_probs_token_entropy = get_response_log_probs(
+                    model= self.model, 
+                    input_ids = input_ids,
+                    labels = labels,
+                    return_token_entropy=False# save GPU memory   
+                )
+                policy_log_probs = policy_log_probs_token_entropy['log_probs'].to(self.model.device)
+                # policy_token_entropy = policy_log_probs_token_entropy['token_entropy'].to(self.model.device)
+                
+                # 函数包含反向传播, 更新策略模型 
+                scaled_loss,loss_metadata = grpo_microbatch_train_step(
+                    policy_log_probs = policy_log_probs,
+                    response_mask = response_mask,
+                    gradient_accumulation_steps=self.config.gradient_accumulation_steps,
+                    loss_type = self.config.loss_type,
+                    raw_rewards = raw_rewards,
+                    advantages = advantages,
+                    old_log_probs = old_log_probs,
+                    cliprange= self.config.clip_range
+                )
+                total_batch_loss += scaled_loss.item()
+                # total_batch_entropy += masked_mean(policy_token_entropy, response_mask)# 全局平均
+                gradient_update_step += 1
 
-            train_step_log = {
-                'is_clipped_ratio': loss_metadata['is_clipped_ratio'],
-                'gradient_step_sclaed_loss': loss_metadata['scaled_loss'],
-                'gradient_step': global_it * self.config.gradient_accumulation_steps + step,
-            }
+                # 每隔 gradient_accumulation_steps步进行一次梯度更新
+                if gradient_update_step % self.config.gradient_accumulation_steps ==0:
+                    # 梯度累积更新
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        max_norm = self.config.max_grad_norm,
+                        norm_type=2
+                    )
+                    self.optimizer.step()
+                    self.optimizer.zero_grad(set_to_none=True)  
+
+
+                train_step_log = {
+                    'is_clipped_ratio': loss_metadata['is_clipped_ratio'],
+                    'sclaed_loss': loss_metadata['scaled_loss'],
+                    # 'gradient_step': global_it * self.config.gradient_accumulation_steps + step,
+                }
+                wandb.log(train_step_log)
+
             del input_ids,labels,response_mask,old_log_probs,policy_log_probs,advantages,raw_rewards
             clear_gpu_memory()# -6k
-            wandb.log(train_step_log)
-            
-
-        # 梯度累积更新
-        torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(),
-            max_norm = self.config.max_grad_norm,
-            norm_type=2
-        )
-        self.optimizer.step()
-        self.optimizer.zero_grad(set_to_none=True)  
         
         avg_batch_loss = total_batch_loss 
         avg_batch_entropy = total_batch_entropy / self.config.gradient_accumulation_steps

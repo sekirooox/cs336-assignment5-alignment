@@ -41,8 +41,9 @@ wandb.init(
 )
 
 # 设备
-device1 = get_device(5)
-device2 = get_device(4)
+device = get_device()
+# device1 = get_device(5)
+# device2 = get_device(4)
 
 # 训练模型
 # model_name ='model/Qwen2.5-Math-1.5B'
@@ -51,13 +52,13 @@ model = AutoModelForCausalLM.from_pretrained(
         pretrained_model_name_or_path=model_name,
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
-        device_map=device1,# device 1
+        device_map=device,# device 1
 )
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 optimizer = torch.optim.AdamW(model.parameters(), lr=config.max_lr, weight_decay=config.weight_decay, betas = config.betas, eps = config.eps)
 
 # vllm离线推理模型 GPU利用率不能太高
-vllm = init_vllm(model_name,device=device2,seed=config.seed,gpu_memory_utilization=0.6)
+vllm = init_vllm(model_name,device=device,seed=config.seed,gpu_memory_utilization=0.6)
 
 trainer = GRPOTrainer(
     model,

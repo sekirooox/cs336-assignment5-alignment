@@ -397,14 +397,38 @@ class EIConfig(SFTConfig):
 class GRPOConfig(SFTConfig):
     """
     GRPO（Group Relative Policy Optimization）训练配置。
+    继承 SFTConfig 的通用字段，并新增 GRPO 相关超参。
     """
+
     # -------- GRPO / PPO 相关超参 --------
+    # 一次 vLLM rollout 展平后的样本数（= n_prompts * group_size）
+    rollout_batch_size: int = 128
+    # 逻辑上的训练 batch 大小（本作业中可与 rollout_batch_size 相同）
+    train_batch_size: int = 128
+    # 每次送给 vLLM 的 prompt 数量（GRPODataset.sample_responses 使用）
+    vllm_prompt_batch_size: int = 128
+    # 单个 micro batch 样本数（对应你代码里的 micro_batch_size）
+    micro_batch_size: int = 8
+    # 每个 rollout_batch 在离线阶段训练的 epoch 数（Off‑policy 程度）
+    n_train_steps_per_rollout_batch: int = 1
+    # 每个 prompt 的生成条数（group_size），也是 grpo_sampling_params.n
     group_size: int = 4
+    # PPO / GRPO 裁剪范围
     clip_range: float = 0.2
+    # advantage 归一化时的 eps
     advantage_eps: float = 1e-8
+    # 是否按 std 归一化 advantage
     normalize_by_std: bool = True
-    loss_type: Literal["no_baseline", "reinforce_with_baseline", "grpo_clip"] = 'grpo_clip'
-    n_train_steps_per_rollout_batch:int = 1 # On-policy default
+    # 损失类型（你的 grpo_microbatch_train_step 会用到）
+    loss_type: Literal["no_baseline", "reinforce_with_baseline", "grpo_clip"] = "grpo_clip"
+
+    # -------- 额外与 GRPO 相关、在代码中访问到的字段 --------
+    # NOTE: SFTConfig 中已经有：
+    # - max_grad_norm
+    # - normalize_constant
+    # - reward_fn / reward_fn_name
+    # - sampling_params（SFT 用）
+    # 这里不需要重复定义，只要在 __post_init__ 里构造 grpo_sampling_params 即可。
 
     # GRPO 专用采样参数（与 SFTConfig 中的 sampling_params 区分）
     grpo_temperature: float = 1.0
@@ -433,8 +457,17 @@ class GRPOConfig(SFTConfig):
             stop=stop,
             seed=self.seed,
             include_stop_str_in_output=self.grpo_include_stop_str_in_output,
-            n=self.group_size,
+            n=self.group_size,  # 必须与 group_size 对齐，GRPODataset/Trainer 里有断言
         )
+
+        # 根据 rollout_batch_size 和 micro_batch_size 推导一个默认的梯度累积步数，
+        # 供你在外部计算/检查时使用（如果已经在 SFTConfig 中定义则不会覆盖）。
+        if not hasattr(self, "gradient_accumulation_steps") or self.gradient_accumulation_steps is None:
+            # 避免除零
+            if self.micro_batch_size > 0:
+                self.gradient_accumulation_steps = max(
+                    1, self.rollout_batch_size // self.micro_batch_size
+                )
 
     def to_json(self, filepath: str) -> None:
         """
@@ -444,55 +477,59 @@ class GRPOConfig(SFTConfig):
         """
         config_dict: Dict[str, Any] = {
             # ---------- 从 SFTConfig 继承的字段 ----------
-            'seed': self.seed,
-            'project_name': self.project_name,
-            'name': self.name,
-            'batch_size': self.batch_size,
-            'gradient_accumulation_steps': self.gradient_accumulation_steps,
-            'max_iters': self.max_iters,
-            'start_iters': self.start_iters,
-            'weight_decay': self.weight_decay,
-            'betas': list(self.betas),
-            'eps': self.eps,
-            'max_lr': self.max_lr,
-            'min_lr': self.min_lr,
-            'warmup_iters': self.warmup_iters,
-            'cosine_schedule_iters': self.cosine_schedule_iters,
-            'max_grad_norm': self.max_grad_norm,
-            'normalize_constant': self.normalize_constant,
-            'train_dataset_path': self.train_dataset_path,
-            'test_dataset_path': self.test_dataset_path,
-            'prompt_template_path': self.prompt_template_path,
-            'eval_interval': self.eval_interval,
-            'sample_size': self.sample_size,
-            'save_interval': self.save_interval,
-            'save_dir': self.save_dir,
-            'temperature': self.temperature,
-            'top_p': self.top_p,
-            'max_tokens': self.max_tokens,
-            'stop': self.stop,
-            'include_stop_str_in_output': self.include_stop_str_in_output,
-            'reward_fn_name': self.reward_fn_name,
+            "seed": self.seed,
+            "project_name": self.project_name,
+            "name": self.name,
+            "batch_size": self.batch_size,
+            "gradient_accumulation_steps": self.gradient_accumulation_steps,
+            "max_iters": self.max_iters,
+            "start_iters": self.start_iters,
+            "weight_decay": self.weight_decay,
+            "betas": list(self.betas),
+            "eps": self.eps,
+            "max_lr": self.max_lr,
+            "min_lr": self.min_lr,
+            "warmup_iters": self.warmup_iters,
+            "cosine_schedule_iters": self.cosine_schedule_iters,
+            "max_grad_norm": self.max_grad_norm,
+            "normalize_constant": self.normalize_constant,
+            "train_dataset_path": self.train_dataset_path,
+            "test_dataset_path": self.test_dataset_path,
+            "prompt_template_path": self.prompt_template_path,
+            "eval_interval": self.eval_interval,
+            "sample_size": self.sample_size,
+            "save_interval": self.save_interval,
+            "save_dir": self.save_dir,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "max_tokens": self.max_tokens,
+            "stop": self.stop,
+            "include_stop_str_in_output": self.include_stop_str_in_output,
+            "reward_fn_name": self.reward_fn_name,
 
             # ---------- GRPOConfig 新增字段 ----------
-            'group_size': self.group_size,
-            'clip_range': self.clip_range,
-            'advantage_eps': self.advantage_eps,
-            'normalize_by_std': self.normalize_by_std,
-            'loss_type': self.loss_type,
-            'n_train_steps_per_rollout_batch': self.n_train_steps_per_rollout_batch,
+            "rollout_batch_size": self.rollout_batch_size,
+            "train_batch_size": self.train_batch_size,
+            "vllm_prompt_batch_size": self.vllm_prompt_batch_size,
+            "micro_batch_size": self.micro_batch_size,
+            "n_train_steps_per_rollout_batch": self.n_train_steps_per_rollout_batch,
+            "group_size": self.group_size,
+            "clip_range": self.clip_range,
+            "advantage_eps": self.advantage_eps,
+            "normalize_by_std": self.normalize_by_std,
+            "loss_type": self.loss_type,
 
             # GRPO 采样字段
-            'grpo_temperature': self.grpo_temperature,
-            'grpo_top_p': self.grpo_top_p,
-            'grpo_max_tokens': self.grpo_max_tokens,
-            'grpo_min_tokens': self.grpo_min_tokens,
-            'grpo_stop': self.grpo_stop,
-            'grpo_include_stop_str_in_output': self.grpo_include_stop_str_in_output,
+            "grpo_temperature": self.grpo_temperature,
+            "grpo_top_p": self.grpo_top_p,
+            "grpo_max_tokens": self.grpo_max_tokens,
+            "grpo_min_tokens": self.grpo_min_tokens,
+            "grpo_stop": self.grpo_stop,
+            "grpo_include_stop_str_in_output": self.grpo_include_stop_str_in_output,
         }
 
-        os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else '.', exist_ok=True)
-        with open(filepath, 'w', encoding='utf-8') as f:
+        os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else ".", exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(config_dict, f, indent=4, ensure_ascii=False)
 
         print(f"✅ GRPOConfig saved to {filepath}")
@@ -503,30 +540,34 @@ class GRPOConfig(SFTConfig):
         从 JSON 文件中加载 GRPOConfig，兼容缺失 GRPO 字段的老配置：
         若某些字段不存在，则使用类默认值。
         """
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, "r", encoding="utf-8") as f:
             config_dict = json.load(f)
 
         # ---------- 兼容老配置：为缺失字段填默认值 ----------
         default = cls()  # 用于获取类默认值
 
         # SFTConfig 中需要特殊处理的字段
-        if 'betas' in config_dict and isinstance(config_dict['betas'], list):
-            config_dict['betas'] = tuple(config_dict['betas'])
+        if "betas" in config_dict and isinstance(config_dict["betas"], list):
+            config_dict["betas"] = tuple(config_dict["betas"])
 
-        # GRPO 相关字段（仅限当前类中真实存在的字段）
+        # GRPO 相关字段（确保 GRPODataset/GRPOTrainer 中用到的 key 都存在）
         for field_name in [
-            'group_size',
-            'clip_range',
-            'advantage_eps',
-            'normalize_by_std',
-            'loss_type',
-            'n_train_steps_per_rollout_batch',
-            'grpo_temperature',
-            'grpo_top_p',
-            'grpo_max_tokens',
-            'grpo_min_tokens',
-            'grpo_stop',
-            'grpo_include_stop_str_in_output',
+            "rollout_batch_size",
+            "train_batch_size",
+            "vllm_prompt_batch_size",
+            "micro_batch_size",
+            "n_train_steps_per_rollout_batch",
+            "group_size",
+            "clip_range",
+            "advantage_eps",
+            "normalize_by_std",
+            "loss_type",
+            "grpo_temperature",
+            "grpo_top_p",
+            "grpo_max_tokens",
+            "grpo_min_tokens",
+            "grpo_stop",
+            "grpo_include_stop_str_in_output",
         ]:
             if field_name not in config_dict:
                 config_dict[field_name] = getattr(default, field_name)
@@ -548,38 +589,63 @@ class GRPOConfig(SFTConfig):
         # 1. 基础 / SFT 训练相关
         print("\n[基础与 SFT 训练配置]")
         for k in [
-            'seed', 'project_name', 'name',
-            'batch_size', 'gradient_accumulation_steps',
-            'max_iters', 'start_iters',
-            'weight_decay', 'betas', 'eps',
-            'max_lr', 'min_lr', 'warmup_iters', 'cosine_schedule_iters',
-            'max_grad_norm', 'normalize_constant',
-            'train_dataset_path', 'test_dataset_path', 'prompt_template_path',
-            'eval_interval', 'sample_size',
-            'save_interval', 'save_dir',
-            'temperature', 'top_p', 'max_tokens', 'stop',
-            'include_stop_str_in_output', 'reward_fn_name',
+            "seed",
+            "project_name",
+            "name",
+            "batch_size",
+            "gradient_accumulation_steps",
+            "max_iters",
+            "start_iters",
+            "weight_decay",
+            "betas",
+            "eps",
+            "max_lr",
+            "min_lr",
+            "warmup_iters",
+            "cosine_schedule_iters",
+            "max_grad_norm",
+            "normalize_constant",
+            "train_dataset_path",
+            "test_dataset_path",
+            "prompt_template_path",
+            "eval_interval",
+            "sample_size",
+            "save_interval",
+            "save_dir",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stop",
+            "include_stop_str_in_output",
+            "reward_fn_name",
         ]:
             print(f"  {k:32s}: {cfg.get(k)}")
 
         # 2. GRPO 训练超参
         print("\n[GRPO / PPO 超参数]")
         for k in [
-            'group_size',
-            'clip_range',
-            'advantage_eps',
-            'normalize_by_std',
-            'loss_type',
-            'n_train_steps_per_rollout_batch',
+            "rollout_batch_size",
+            "train_batch_size",
+            "vllm_prompt_batch_size",
+            "micro_batch_size",
+            "group_size",
+            "clip_range",
+            "advantage_eps",
+            "normalize_by_std",
+            "loss_type",
+            "n_train_steps_per_rollout_batch",
         ]:
             print(f"  {k:32s}: {cfg.get(k)}")
 
         # 3. GRPO 采样配置字段
         print("\n[GRPO 采样配置字段 (配置层面)]")
         for k in [
-            'grpo_temperature', 'grpo_top_p',
-            'grpo_max_tokens', 'grpo_min_tokens',
-            'grpo_stop', 'grpo_include_stop_str_in_output',
+            "grpo_temperature",
+            "grpo_top_p",
+            "grpo_max_tokens",
+            "grpo_min_tokens",
+            "grpo_stop",
+            "grpo_include_stop_str_in_output",
         ]:
             print(f"  {k:32s}: {cfg.get(k)}")
 
@@ -625,5 +691,5 @@ if __name__ == "__main__":
     # print(f"reward_fn name: {config.reward_fn.__name__}")
     # print(f"reward_fn callable? {callable(config.reward_fn)}")
 
-    config = GRPOConfig.from_json('cs336_alignment/configs/grpo.json')
+    config = GRPOConfig.from_json('cs336_alignment/configs/grpo_math.json')
     config.pretty_print()

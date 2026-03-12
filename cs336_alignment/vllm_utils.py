@@ -59,11 +59,12 @@ def generate_rollouts(
     vllm:LLM,
     prompts:List[str],
     sampling_params:SamplingParams,
+    use_tqdm:bool = True,
 )->List[List[str]]:
     """
     对每个prompt生成多条响应（rollout）
     """
-    outputs = vllm.generate(prompts, sampling_params)
+    outputs = vllm.generate(prompts, sampling_params,use_tqdm = use_tqdm)
     rollouts = [[o.text for o in output.outputs] for output in outputs]
     return rollouts
 

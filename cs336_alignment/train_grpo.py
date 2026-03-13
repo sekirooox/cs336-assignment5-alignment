@@ -68,3 +68,6 @@ trainer = GRPOTrainer(
 
 trainer.train()
 wandb.finish()
+"""
+uv run cs336_alignment/train_grpo.py --json_path cs336_alignment/configs/grpo_math.json
+"""

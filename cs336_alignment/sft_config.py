@@ -419,6 +419,8 @@ class GRPOConfig(SFTConfig):
     advantage_eps: float = 1e-8
     # 是否按 std 归一化 advantage
     normalize_by_std: bool = True
+    # 是否按 length 归一化 logprobs
+    normalize_by_length: bool = True
     # 损失类型（你的 grpo_microbatch_train_step 会用到）
     loss_type: Literal["no_baseline", "reinforce_with_baseline", "grpo_clip"] = "grpo_clip"
 
@@ -517,6 +519,7 @@ class GRPOConfig(SFTConfig):
             "clip_range": self.clip_range,
             "advantage_eps": self.advantage_eps,
             "normalize_by_std": self.normalize_by_std,
+            "normalize_by_length": self.normalize_by_length,
             "loss_type": self.loss_type,
 
             # GRPO 采样字段
@@ -561,6 +564,7 @@ class GRPOConfig(SFTConfig):
             "clip_range",
             "advantage_eps",
             "normalize_by_std",
+            "normalize_by_length",
             "loss_type",
             "grpo_temperature",
             "grpo_top_p",
@@ -632,6 +636,7 @@ class GRPOConfig(SFTConfig):
             "clip_range",
             "advantage_eps",
             "normalize_by_std",
+            "normalize_by_length",
             "loss_type",
             "n_train_steps_per_rollout_batch",
         ]:
@@ -691,5 +696,5 @@ if __name__ == "__main__":
     # print(f"reward_fn name: {config.reward_fn.__name__}")
     # print(f"reward_fn callable? {callable(config.reward_fn)}")
 
-    config = GRPOConfig.from_json('cs336_alignment/configs/grpo_math.json')
+    config = GRPOConfig.from_json('cs336_alignment/configs/grpo_math_no_r_std_no_lnorm.json')
     config.pretty_print()

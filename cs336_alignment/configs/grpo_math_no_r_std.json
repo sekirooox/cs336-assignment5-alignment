@@ -41,7 +41,7 @@
     "n_train_steps_per_rollout_batch": 2,
     "clip_range": 0.2,
     "advantage_eps": 1e-8,
-    "normalize_by_std": true,
+    "normalize_by_std": false,
     "normalize_by_length": true,
     "loss_type": "grpo_clip",
     "grpo_temperature": 1.0,

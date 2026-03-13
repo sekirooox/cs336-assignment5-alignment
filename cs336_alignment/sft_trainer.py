@@ -738,7 +738,6 @@ class GRPOTrainer(SFTTrainer):
                     labels = labels,
                     return_token_entropy=False)
                 # 去除计算图
-
             
             # NOTE: 不需要常驻GPU
             micro_batch_advantages = micro_batch_advantages.to('cpu')
@@ -753,6 +752,7 @@ class GRPOTrainer(SFTTrainer):
             response_mask_list.append(response_mask)
             old_log_probs = old_log_probs_token_entropy['log_probs'].detach().to('cpu')
             old_log_probs_list.append(old_log_probs)
+            
         clear_gpu_memory()
 
         for epoch in range(self.config.n_train_steps_per_rollout_batch):
@@ -782,7 +782,10 @@ class GRPOTrainer(SFTTrainer):
                     raw_rewards = raw_rewards,
                     advantages = advantages,
                     old_log_probs = old_log_probs,
-                    cliprange= self.config.clip_range
+                    cliprange= self.config.clip_range,
+                    # 长度归一化 Dr.GRPO
+                    normalize_by_length= self.config.normalize_by_length,
+                    normalize_constant = self.config.normalize_constant
                 )
                 total_batch_loss += scaled_loss.item()
                 gradient_update_step += 1

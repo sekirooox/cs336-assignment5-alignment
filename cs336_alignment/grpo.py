@@ -1,6 +1,7 @@
 import torch
 from typing import Callable,List,Optional,Union,Literal
 from einops import rearrange
+from sft import *
 
 @torch.no_grad()
 def compute_group_normalized_rewards(
@@ -199,6 +200,8 @@ def grpo_microbatch_train_step(
     advantages: torch.Tensor | None = None,
     old_log_probs: torch.Tensor | None = None,
     cliprange: float | None = None,
+    normalize_by_length: True = True,
+    normalize_constant: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     loss, metadata = compute_policy_gradient_loss(
         policy_log_probs=policy_log_probs,
@@ -210,11 +213,19 @@ def grpo_microbatch_train_step(
     )
 
     # 这一步与标准的PPO/GRPO实现不同,\sum{i=1}^T log \pi(a_i|s_i)
-    masked_loss = masked_mean(
-        tensor = loss,
-        mask = response_mask,
-        dim = -1,
-    ).mean() # b -> 1
+    if normalize_by_length:
+        masked_loss = masked_normalize(
+            tensor = loss,
+            mask = response_mask,
+            normalize_constant = normalize_constant,
+            dim = -1
+        ).mean() # b -> 1
+    else:
+        masked_loss = masked_mean(
+            tensor = loss,
+            mask = response_mask,
+            dim = -1,
+        ).mean() # b -> 1
 
     # 梯度累积和反向传播
     scaled_loss = masked_loss / gradient_accumulation_steps

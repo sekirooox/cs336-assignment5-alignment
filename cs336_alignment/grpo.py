@@ -6,11 +6,11 @@ from sft import *
 @torch.no_grad()
 def compute_group_normalized_rewards(
     reward_fn: Callable[[str, str], dict[str, float]],
-    rollout_responses,
-    repeated_ground_truths,
-    group_size,
-    advantage_eps,
-    normalize_by_std,
+    rollout_responses: list[str],
+    repeated_ground_truths: list[str],
+    group_size: int,
+    advantage_eps: float,
+    normalize_by_std: bool,
 ):
     """为每组 rollout 响应计算奖励，并按组进行归一化。
 
@@ -181,9 +181,15 @@ def masked_mean(
     dim: int | None = None,
 ) -> torch.Tensor:
     """
-    这个代码是错误的,会影响均值: 
-    masked_tensor = tensor * mask
-    return masked_tensor.mean(dim=dim)
+    计算带掩码的张量均值。
+
+    Args:
+        tensor: 输入张量。
+        mask: 布尔掩码，用于指示哪些元素是有效的。
+        dim: 沿哪个维度计算均值，若为 None 则对整个张量计算。
+
+    Returns:
+        torch.Tensor: 带掩码的均值。
     """
     valid_elements = mask.float().sum(dim=dim)# b l-> b
     masked_tensor = tensor * mask

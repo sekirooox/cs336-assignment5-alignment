@@ -12,11 +12,17 @@ from sft import *
 import wandb
 import os
 from drgrpo_grader import r1_zero_reward_fn
-from sft_trainer import SFTTrainer
-from sft_config import SFTConfig
-os.environ["WANDB_API_KEY"] = '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'
+from trainer import SFTTrainer
+from config import SFTConfig
+os.environ["WANDB_API_KEY"] = 'xxx'
 import argparse
 def parse():
+    """
+    解析命令行参数。
+
+    Returns:
+        argparse.Namespace: 包含解析后的命令行参数。
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--json_path",

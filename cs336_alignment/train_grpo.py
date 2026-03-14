@@ -3,18 +3,24 @@ import torch
 from vllm import LLM,SamplingParams
 from vllm_utils import *
 from utils import *
-from sft_config import *
+from config import *
 import os
 from sft import *
-from sft_trainer import *
-from sft_config import *
+from trainer import *
+from config import *
 from drgrpo_grader import r1_zero_reward_fn
 import wandb
-# os.environ["WANDB_API_KEY"] = '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'
+# os.environ["WANDB_API_KEY"] = 'xxx'
 os.environ["WANDB_MODE"] = "offline"
 
 import argparse
 def parse():
+    """
+    解析命令行参数。
+
+    Returns:
+        argparse.Namespace: 包含解析后的命令行参数。
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--json_path",
@@ -41,8 +47,8 @@ wandb.init(
 )
 
 # 设备
-device1 = get_device(4)
-device2 = get_device(5)
+device1 = get_device(0)
+device2 = get_device(0)
 
 # 训练模型
 model_name = 'model/EI_iteration_5'

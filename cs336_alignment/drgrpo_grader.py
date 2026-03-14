@@ -1006,15 +1006,28 @@ def grade(model_answer: str, gt_answer: str, fast: bool = True):
 
 from typing import Dict
 def r1_zero_reward_fn(
-response:str, 
-ground_truth:str, # only answer is required 
+response:str,
+ground_truth:str,
 fast=True
 )->Dict[str,float]:
     """
-    这个奖励函数预期传入的是纯答案
-    格式检查：检查 "</think> <answer>" 是否在response中（注意中间有空格）
-    答案提取：如果格式正确，提取 <answer> 和 </answer> 之间的内容
-    答案比对：使用 grade() 函数比对模型答案和 ground truth
+    R1-Zero 风格的奖励函数，用于评估模型生成的响应。
+
+    该函数预期传入的是纯答案，执行以下步骤：
+    1. 格式检查：检查 "</think> <answer>" 是否在 response 中（注意中间有空格）
+    2. 答案提取：如果格式正确，提取 <answer> 和 </answer> 之间的内容
+    3. 答案比对：使用 grade() 函数比对模型答案和 ground truth
+
+    Args:
+        response: 模型生成的响应字符串。
+        ground_truth: 真实答案字符串。
+        fast: 是否使用快速模式（跳过 math_verify 验证），默认为 True。
+
+    Returns:
+        Dict[str, float]: 包含以下键的字典：
+            - format_reward: 格式奖励（格式正确为 1.0，否则为 0.0）
+            - answer_reward: 答案奖励（答案正确为 1.0，否则为 0.0）
+            - reward: 综合奖励（格式和答案都正确为 1.0，否则为 0.0）
     """
     # We are strict about format to evaluate our models.
     if "</think> <answer>" in response and "</answer>" in response:

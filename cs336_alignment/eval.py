@@ -12,8 +12,8 @@ if __name__=='__main__':
     # init llm,
     # model_path ='checkpoints/checkpoint_499' # local path
     # model_path ='model/Qwen2.5-Math-1.5B' # online path
-    model_path = 'model/EI_iteration_5'
-    llm = init_vllm(model_path,device=get_device(5),seed=42,gpu_memory_utilization=0.6)
+    model_path = 'model/GRPO'
+    llm = init_vllm(model_path,device=get_device(4),seed=42,gpu_memory_utilization=0.3)
     print('init LLM successfully!')
 
     # load_template
@@ -22,7 +22,7 @@ if __name__=='__main__':
 
     # generation
     import os 
-    json_path  = 'preprocessed/gsm8k/test.jsonl'
+    json_path  = 'preprocessed/math/test.jsonl'
     prompts = get_r1_prompts(json_path,r1_template)
     ground_truths = get_r1_ground_truths(json_path)
 
@@ -31,7 +31,7 @@ if __name__=='__main__':
     temperature=1.0,
     top_p=1.0,
     max_tokens=1024,
-    min_tokens=32,
+    min_tokens=4,
     stop = ["</answer>"],
     include_stop_str_in_output = True
     )
@@ -39,8 +39,17 @@ if __name__=='__main__':
     print(overview)
 
     """
-    math:0.466
+    Zero-shot:
+    math:2.4%
+    gsm8k: 3.0%
+
+    EI:
+    math:46.6%
     gsm8k:0.582
+
+    GRPO:
+    math:58.2%
+    gsm8k:73.7%
     """
         
     

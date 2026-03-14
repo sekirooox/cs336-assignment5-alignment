@@ -118,9 +118,16 @@ def preprocess_data(
 
 import random
 def filter_data(
-    train_json_path:str,
-    num_samples:int = 128,
-):
+    train_json_path: str,
+    num_samples: int = 128,
+) -> None:
+    """
+    从训练数据中随机采样指定数量的样本，并保存为新的 jsonl 文件。
+
+    Args:
+        train_json_path: 训练数据文件路径。
+        num_samples: 随机采样的样本数量，默认为 128。
+    """
     json_iter = load_json(train_json_path)
     train_data = [json_obj for json_obj in json_iter]
     filtered_data = random.sample(train_data,k=num_samples)
@@ -203,15 +210,6 @@ def filter_correct_data(
 
 
 if __name__ == "__main__":
-    # 示例 2：批量预处理一个目录，保存为 jsonl
-    # 假设目录 data/gsm8k/ 下有多个 .jsonl 文件
-    # preprocess_data(
-    #     json_dir='data/gsm8k',
-    #     mode='gsm8k',
-    #     out_dir='preprocessed/gsm8k',
-    # )
-
-
     train_json_path = 'preprocessed/math/train.jsonl'
     # 过滤样本,仅对math数据集进行消融研究
     # num_samples_list = [128,256,512,1024]

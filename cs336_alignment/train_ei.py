@@ -3,17 +3,23 @@ import torch
 from vllm import LLM,SamplingParams
 from vllm_utils import *
 from utils import *
-from sft_config import EIConfig
-from sft_config import SFTConfig
+from config import EIConfig
+from config import SFTConfig
 import os
 from sft import *
-from sft_trainer import *
+from trainer import *
 from drgrpo_grader import r1_zero_reward_fn
 import wandb
-os.environ["WANDB_API_KEY"] = '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'
+os.environ["WANDB_API_KEY"] = 'xxx'
 
 import argparse
 def parse():
+    """
+    解析命令行参数。
+
+    Returns:
+        argparse.Namespace: 包含解析后的命令行参数。
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--json_path",

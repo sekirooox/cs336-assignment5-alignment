@@ -7,9 +7,18 @@ import torch
 from sft import tokenize_prompt_and_output,get_response_log_probs
 from utils import *
 
-def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: float = 0.85):
+def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: float = 0.85) -> LLM:
     """
-    启动推理过程，此处使用vLLM将模型部署在与策略模型不同的GPU上。
+    启动推理过程，此处使用 vLLM 将模型部署在与策略模型不同的 GPU 上。
+
+    Args:
+        model_id: 模型 ID 或本地路径。
+        device: GPU 设备字符串（如 "cuda:0"）。
+        seed: 随机种子。
+        gpu_memory_utilization: GPU 内存利用率，默认为 0.85。
+
+    Returns:
+        LLM: 初始化后的 vLLM 模型实例。
     """
     vllm_set_random_seed(seed)
     # 从TRL借鉴的Monkeypatch：https://github.com/huggingface/trl/blob/
@@ -31,10 +40,16 @@ def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: flo
             gpu_memory_utilization=gpu_memory_utilization,
         )
 
-def load_policy_into_vllm_instance(policy: PreTrainedModel, llm: LLM):
+def load_policy_into_vllm_instance(policy: PreTrainedModel, llm: LLM) -> None:
     """
-    从https://github.com/huggingface/trl/blob/
-    22759c820867c8659d00082ba8cf004e963873c1/trl/trainer/grpo_trainer.py#L670复制
+    将训练好的策略模型权重加载到 vLLM 实例中。
+
+    从 https://github.com/huggingface/trl/blob/
+    22759c820867c8659d00082ba8cf004e963873c1/trl/trainer/grpo_trainer.py#L670 复制
+
+    Args:
+        policy: HuggingFace 预训练模型（训练中的策略模型）。
+        llm: vLLM 模型实例。
     """
     state_dict = policy.state_dict()
     llm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
@@ -46,124 +61,65 @@ def generate_responses(
     sampling_params: SamplingParams
 ) -> List[str]:
     """
-    使用vLLM生成响应
+    使用 vLLM 生成响应。
+
+    Args:
+        vllm: vLLM 模型实例。
+        prompts: 单个 prompt 字符串或 prompt 列表。
+        sampling_params: 采样参数。
+
+    Returns:
+        List[str]: 生成的响应字符串列表。
     """    
     # 生成响应
     outputs = vllm.generate(prompts, sampling_params)
     responses = [output.outputs[0].text for output in outputs]
     return responses
 
-# EI
 @torch.no_grad()
 def generate_rollouts(
-    vllm:LLM,
-    prompts:List[str],
-    sampling_params:SamplingParams,
-    use_tqdm:bool = True,
-)->List[List[str]]:
+    vllm: LLM,
+    prompts: List[str],
+    sampling_params: SamplingParams,
+    use_tqdm: bool = True,
+) -> List[List[str]]:
     """
-    对每个prompt生成多条响应（rollout）
+    对每个 prompt 生成多条响应（rollout）。
+
+    Args:
+        vllm: vLLM 模型实例。
+        prompts: prompt 列表。
+        sampling_params: 采样参数。
+        use_tqdm: 是否显示进度条，默认为 True。
+
+    Returns:
+        List[List[str]]: 二维列表，外层每个元素对应一个 prompt，内层每个元素对应一条响应。
     """
     outputs = vllm.generate(prompts, sampling_params,use_tqdm = use_tqdm)
     rollouts = [[o.text for o in output.outputs] for output in outputs]
     return rollouts
 
-
-
-# BUG: 使用vllm获得old_log_probs的函数逻辑存在严重错误, 不建议使用
-@torch.no_grad()
-def get_response_log_probs_vllm(
-        repeated_prompt_ids:List[List[int]],# b*g ?
-        flatten_output_log_probs:List[List[float]],# b*g ?
-        response_mask: torch.Tensor, # ... l
-    )->torch.Tensor:
-        """
-        return : bg l
-        """
-        max_seq_len = response_mask.shape[-1]
-        # logprob<=0 填充的无效值应该为整数
-        old_log_probs = [
-                [100]* len(prompt_ids) + old_log_probs + 
-                [100]* (max_seq_len -len(prompt_ids) - len(old_log_probs)+1) # padding last token
-                for prompt_ids, old_log_probs in zip(repeated_prompt_ids, flatten_output_log_probs)
-        ]
-        # b*g l+1 多出一个token,补充一个padding
-        old_log_probs = torch.tensor(old_log_probs, device=response_mask.device)
-        return old_log_probs[:,1:]# b*g l
-
-# NOTE: vllm不能按照预期产生old_log_probs, 现在的返回值无效
-@torch.no_grad()
-def generate_grpo_samples(
-    vllm: LLM,
-    prompts: list[str],# unrepeated prompts
-    sampling_params: SamplingParams,
-) -> Dict[str, List[List[List[float]]]]:
-    """
-    使用 vLLM 为每个 prompt 生成多条响应（rollout），并返回：
-    - 文本响应
-    - 每个响应 token 的 log_prob（旧策略）
-    - 每个 prompt 的 token_ids（用于确定 prompt 长度）
-
-    """
-    outputs = vllm.generate(prompts, sampling_params)
-    responses: list[list[str]] = [
-        [o.text for o in output_per_prompt.outputs]
-        for output_per_prompt in outputs
-    ]
-    flatten_responses = [
-        response_per_rollout
-        for responses_per_prompt in responses
-            for response_per_rollout in responses_per_prompt
-    ]
-
-    output_logprobs: list[list[list[float]]] = [
-        [
-            [
-                logprobs_dict[token_id].logprob
-                for token_id, logprobs_dict in zip(
-                    output_per_rollout.token_ids,
-                    output_per_rollout.logprobs,
-                )
-            ]
-            for output_per_rollout in output_per_prompt.outputs
-        ]
-        for output_per_prompt in outputs
-    ]
-    flatten_output_logprobs = [
-        output_logprobs_per_rollout
-        for output_logprobs_per_prompt in output_logprobs
-            for output_logprobs_per_rollout in output_logprobs_per_prompt
-    ]
-
-    prompt_token_ids: list[list[int]] = [
-        output_per_prompt.prompt_token_ids
-        for output_per_prompt in outputs
-    ]
-    repeated_prompt_token_ids = [
-        prompt_token_ids_per_sample
-        for prompt_token_ids_per_sample in prompt_token_ids
-            for _ in range(sampling_params.n)  # 每个 prompt 重复 n 次（n 是 rollout 数量）
-    ]
-    unflatten_metdata = {
-        "responses": responses,
-        "output_logprobs": output_logprobs,
-        "prompt_token_ids": prompt_token_ids,
-    }
-    flatten_metadata = {
-        "responses": flatten_responses,
-        "output_logprobs": flatten_output_logprobs,
-        "prompt_token_ids": repeated_prompt_token_ids,
-    }
-    return unflatten_metdata, flatten_metadata
-
 @torch.no_grad()
 def evaluate_vllm(
-    vllm:LLM,
-    prompts:List[str],
-    ground_truths:List[str],
-    sampling_params:SamplingParams,
-    reward_fn:Callable,# defined in drgrpo_grader.py 
-)->Dict[str,int]:
+    vllm: LLM,
+    prompts: List[str],
+    ground_truths: List[str],
+    sampling_params: SamplingParams,
+    reward_fn: Callable,
+) -> Dict[str, int]:
+    """
+    使用 vLLM 评估模型在给定 prompts 上的表现。
+
+    Args:
+        vllm: vLLM 模型实例。
+        prompts: prompt 列表。
+        ground_truths: 真实答案列表。
+        sampling_params: 采样参数。
+        reward_fn: 奖励函数，用于评估响应。
+
+    Returns:
+        Dict[str, int]: 包含评估指标的字典，如 sample_size, answer_correct, format_correct 等。
+    """
     responses = generate_responses(vllm, prompts, sampling_params)
     rewards = [reward_fn(response, ground_truth) for response,ground_truth in zip(responses,ground_truths)]
     overview = {
@@ -218,10 +174,25 @@ def log_generation(
     ground_truths: list[str],
     reward_fn: Callable,
     model: AutoModelForCausalLM,
-    tokenizer:AutoTokenizer,
-    vllm:LLM,
-    sampling_params,
-):
+    tokenizer: AutoTokenizer,
+    vllm: LLM,
+    sampling_params: SamplingParams,
+) -> Dict[str, Any]:
+    """
+    同时需要 vllm 和 model，对于 model 的显存占用有一定影响。
+
+    Args:
+        prompts: prompt 列表。
+        ground_truths: 真实答案列表。
+        reward_fn: 奖励函数。
+        model: 训练中的策略模型。
+        tokenizer: 分词器。
+        vllm: vLLM 模型实例。
+        sampling_params: 采样参数。
+
+    Returns:
+        Dict[str, Any]: 包含 summary 和 rows 的字典。
+    """
     """
     同时需要vllm和model
     对于model的显存占用有一定影响
